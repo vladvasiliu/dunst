@@ -246,23 +246,48 @@ void add_default_theme(int theme_index) {
 char *find_icon_in_theme(const char *name, int theme_index, int size) {
         struct icon_theme *theme = &icon_themes[theme_index];
         LOG_D("Finding icon %s in theme %s\n", name, theme->name);
+
+        // Look for the icon whose size is the shortest distance to the requested size
+        struct icon_distance {
+            char *name;
+            int distance;
+        };
+
+        struct icon_distance result = {.name = NULL, .distance = -1};
         for (int i = 0; i < theme->dirs_count; i++) {
                 bool match_size = false;
                 struct icon_theme_dir dir = theme->dirs[i];
+                int distance;
                 switch (dir.type) {
                         case THEME_DIR_FIXED:
                                 match_size = dir.size == size;
+                                distance = dir.size - size;
                                 break;
 
                         case THEME_DIR_SCALABLE:
                                 match_size = dir.min_size <= size && dir.max_size >= size;
+                                if (size < dir.min_size * dir.scale) {
+                                        distance = dir.min_size * dir.scale - size;
+                                } else if (size > dir.max_size * dir.scale) {
+                                        distance = size - dir.max_size * dir.scale;
+                                } else {
+                                        distance = 0;
+                                }
                                 break;
 
                         case THEME_DIR_THRESHOLD:
-                                match_size = (float)dir.size / dir.threshold <= size
+                                match_size = (float)dir.size / (float)dir.threshold <= (float)size
                                         && dir.size * dir.threshold >= size;
+                                if (size < (dir.size - dir.threshold) * dir.scale) {
+                                        distance = dir.min_size * dir.scale - size;
+                                } else if (size > (dir.size + dir.threshold) * dir.scale) {
+                                        distance = size - dir.max_size * dir.scale;
+                                } else {
+                                        distance = 0;
+                                }
                                 break;
                 }
+                distance = abs(distance);
                 if (match_size) {
                         const char *suffixes[] = { ".svg", ".svgz", ".png", ".xpm", NULL };
                         for (const char **suf = suffixes; *suf; suf++) {
@@ -270,14 +295,26 @@ char *find_icon_in_theme(const char *name, int theme_index, int size) {
                                 char *icon = g_build_filename(theme->location, theme->subdir_theme,
                                                 dir.name, name_with_extension,
                                                 NULL);
-                                if (is_readable_file(icon)) {
-                                        g_free(name_with_extension);
-                                        return icon;
-                                }
                                 g_free(name_with_extension);
+                                if (is_readable_file(icon)) {
+                                        if (distance == 0) {
+                                                return icon;
+                                        } else if (result.distance < 0 || (result.distance > 0 && distance < result.distance) ) {
+                                                if (result.name) {
+                                                        g_free(result.name);
+                                                }
+                                                result.name = icon;
+                                                result.distance = distance;
+                                        }
+                                }
                                 g_free(icon);
                         }
                 }
+        }
+        if (result.distance > 0 && result.name) {
+                return result.name;
+        } else if (result.name) {
+                g_free(result.name);
         }
         return NULL;
 }
